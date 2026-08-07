@@ -302,7 +302,7 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 		}
 		else {
 			dispatch_async(dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
-				killall("/System/Library/TextInput/kbd", false);
+				killall("/System/Library/TextInput/kbd", SIGKILL);
 			});
 		}
 	}
@@ -323,7 +323,7 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 #ifdef __arm64e__
 	// On arm64e every image has a trust level associated with it
 	// "In trust cache" trust levels have higher runtime enforcements, this can be a problem for some tools as Dopamine trustcaches everything that's adhoc signed
-	// So we add the ability for a binary to get a different trust level using the "jb.pmap_cs_custom_trust" entitlement
+	// So we add the ability for a binary to get a different trust level using the "jb.pmap_cs.custom_trust" entitlement
 	// This is for binaries that rely on weaker PMAP_CS checks (e.g. Lua trampolines need it)
 	xpc_object_t customTrustObj = xpc_copy_entitlement_for_token("jb.pmap_cs.custom_trust", processToken);
 	if (customTrustObj) {
@@ -347,9 +347,9 @@ int systemwide_process_checkin(audit_token_t *processToken, char **rootPathOut, 
 int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 {
 	int retval = 3;
-	uint64_t parentPid = audit_token_to_pid(*parentToken);
+	uint64_t parentPid  = audit_token_to_pid(*parentToken);
 	uint64_t parentProc = proc_find(parentPid);
-	uint64_t childProc = proc_find(childPid);
+	uint64_t childProc  = proc_find(childPid);
 
 	if (childProc && parentProc) {
 		retval = 2;
@@ -357,19 +357,20 @@ int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 		if (kread_ptr(childProc + koffsetof(proc, pptr)) == parentProc) {
 			cs_allow_invalid(childProc, false);
 
-			uint64_t childTask  = proc_task(childProc);
-			uint64_t childVmMap = kread_ptr(childTask + koffsetof(task, map));
+			uint64_t childTask     = proc_task(childProc);
+			uint64_t childVmMap    = kread_ptr(childTask + koffsetof(task, map));
+			uint64_t childHeader   = childVmMap + koffsetof(vm_map, hdr);
+			uint32_t childNentries = kread32(childHeader + koffsetof(vm_map_header, nentries));
+			uint64_t childEntry    = kread_ptr(childHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
 
-			uint64_t parentTask  = proc_task(parentProc);
-			uint64_t parentVmMap = kread_ptr(parentTask + koffsetof(task, map));
-
-			uint64_t parentHeader = kread_ptr(parentVmMap  + koffsetof(vm_map, hdr));
-			uint64_t parentEntry  = kread_ptr(parentHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
-
-			uint64_t childHeader  = kread_ptr(childVmMap  + koffsetof(vm_map, hdr));
-			uint64_t childEntry   = kread_ptr(childHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
+			uint64_t parentTask     = proc_task(parentProc);
+			uint64_t parentVmMap    = kread_ptr(parentTask + koffsetof(task, map));
+			uint64_t parentHeader   = parentVmMap + koffsetof(vm_map, hdr);
+			uint32_t parentNentries = kread32(parentHeader + koffsetof(vm_map_header, nentries));
+			uint64_t parentEntry    = kread_ptr(parentHeader + koffsetof(vm_map_header, links) + koffsetof(vm_map_links, next));
 
 			uint64_t childFirstEntry = childEntry, parentFirstEntry = parentEntry;
+			uint32_t childIdx = 0, parentIdx = 0;
 			do {
 				uint64_t childStart  = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, min));
 				uint64_t childEnd    = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, max));
@@ -378,9 +379,11 @@ int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 
 				if (parentStart < childStart) {
 					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					parentIdx++;
 				}
 				else if (parentStart > childStart) {
 					childEntry = kread_ptr(childEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					childIdx++;
 				}
 				else {
 					uint64_t parentFlags = kread64(parentEntry + koffsetof(vm_map_entry, flags));
@@ -396,9 +399,11 @@ int systemwide_fork_fix(audit_token_t *parentToken, uint64_t childPid)
 					}
 
 					parentEntry = kread_ptr(parentEntry + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					parentIdx++;
 					childEntry  = kread_ptr(childEntry  + koffsetof(vm_map_entry, links) + koffsetof(vm_map_links, next));
+					childIdx++;
 				}
-			} while (parentEntry != 0 && childEntry != 0 && parentEntry != parentFirstEntry && childEntry != childFirstEntry);
+			} while (parentEntry != 0 && childEntry != 0 && parentEntry != parentFirstEntry && childEntry != childFirstEntry && parentIdx < parentNentries && childIdx < childNentries);
 			retval = 0;
 		}
 	}

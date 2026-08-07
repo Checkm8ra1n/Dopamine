@@ -66,7 +66,7 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
 - (NSError *)gatherSystemInformation
 {
     NSString *kernelPath = [[DOEnvironmentManager sharedManager] accessibleKernelPath];
-    if (!kernelPath) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:@{NSLocalizedDescriptionKey:@"Failed to find kernelcache"}];
+    if (!kernelPath) return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedToFindKernel userInfo:@{NSLocalizedDescriptionKey:@"Failed to find kernelcache. Ensure your device is properly connected to the internet. If it still does not work, try installing Dopamine via TrollStore instead."}];
     NSLog(@"Kernel at %s", kernelPath.UTF8String);
     
     [[DOUIManager sharedInstance] sendLog:DOLocalizedString(@"Patchfinding") debug:NO];
@@ -142,8 +142,9 @@ typedef NS_ENUM(NSInteger, JBErrorCode) {
 - (NSError *)doExploitation
 {
     DOExploit *kernelExploit = [DOExploitManager sharedManager].selectedKernelExploit;
-    DOExploit *pacBypass = [DOExploitManager sharedManager].selectedPACBypass;
-    DOExploit *pplBypass = [DOExploitManager sharedManager].selectedPPLBypass;
+    DOExploit *pacBypass     = [DOExploitManager sharedManager].selectedPACBypass;
+    DOExploit *pplBypass     = [DOExploitManager sharedManager].selectedPPLBypass;
+
     if (!kernelExploit) {
         return [NSError errorWithDomain:JBErrorDomain code:JBErrorCodeFailedExploitation userInfo:@{NSLocalizedDescriptionKey:@"Kernel exploit is required but we did not find any"}];
     }
@@ -538,6 +539,9 @@ void *boomerang_server(struct boomerang_info *info)
     if (*errOut) return;
     setenv("PATH", "/sbin:/bin:/usr/sbin:/usr/bin:/var/jb/sbin:/var/jb/bin:/var/jb/usr/sbin:/var/jb/usr/bin", 1);
     setenv("TERM", "xterm-256color", 1);
+
+    *errOut = [[DOEnvironmentManager sharedManager] updateBootLogo];
+    if (*errOut) return;
     
     if (!tweaksEnabled) {
         printf("Creating safe mode marker file since tweaks were disabled in settings\n");
